@@ -1,5 +1,3 @@
-// +build darwin freebsd linux
-
 package fuse
 
 import (
@@ -8,17 +6,11 @@ import (
 
 	"github.com/restic/restic/internal/debug"
 
-	"bazil.org/fuse"
-	"bazil.org/fuse/fs"
 	"golang.org/x/net/context"
 )
 
 // The default block size to report in stat
 const blockSize = 512
-
-// Statically ensure that *file implements the given interface
-var _ = fs.HandleReader(&file{})
-var _ = fs.HandleReleaser(&file{})
 
 type file struct {
 	root  *Root
@@ -61,27 +53,6 @@ func newFile(ctx context.Context, root *Root, inode uint64, node *restic.Node) (
 	}, nil
 }
 
-func (f *file) Attr(ctx context.Context, a *fuse.Attr) error {
-	debug.Log("Attr(%v)", f.node.Name)
-	a.Inode = f.inode
-	a.Mode = f.node.Mode
-	a.Size = f.node.Size
-	a.Blocks = (f.node.Size / blockSize) + 1
-	a.BlockSize = blockSize
-	a.Nlink = uint32(f.node.Links)
-
-	if !f.root.cfg.OwnerIsRoot {
-		a.Uid = f.node.UID
-		a.Gid = f.node.GID
-	}
-	a.Atime = f.node.AccessTime
-	a.Ctime = f.node.ChangeTime
-	a.Mtime = f.node.ModTime
-
-	return nil
-
-}
-
 func (f *file) getBlobAt(ctx context.Context, i int) (blob []byte, err error) {
 	debug.Log("getBlobAt(%v, %v)", f.node.Name, i)
 	if f.blobs[i] != nil {
@@ -103,23 +74,23 @@ func (f *file) getBlobAt(ctx context.Context, i int) (blob []byte, err error) {
 	return blob, nil
 }
 
-func (f *file) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
-	debug.Log("Read(%v, %v, %v), file size %v", f.node.Name, req.Size, req.Offset, f.node.Size)
-	offset := req.Offset
+func (f *file) readData(ctx context.Context, offset int64, data []byte) int {
+	size := len(data)
+	debug.Log("Read(%v, %v, %v), file size %v", f.node.Name, size, offset, f.node.Size)
 
 	if uint64(offset) > f.node.Size {
 		debug.Log("Read(%v): offset is greater than file size: %v > %v",
-			f.node.Name, req.Offset, f.node.Size)
+			f.node.Name, offset, f.node.Size)
 
 		// return no data
-		resp.Data = resp.Data[:0]
-		return nil
+		data = data[:0]
+		return 0
 	}
 
 	// handle special case: file is empty
 	if f.node.Size == 0 {
-		resp.Data = resp.Data[:0]
-		return nil
+		data = data[:0]
+		return 0
 	}
 
 	// Skip blobs before the offset
@@ -129,13 +100,13 @@ func (f *file) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadR
 		startContent++
 	}
 
-	dst := resp.Data[0:req.Size]
+	dst := data[0:size]
 	readBytes := 0
-	remainingBytes := req.Size
+	remainingBytes := size
 	for i := startContent; remainingBytes > 0 && i < len(f.sizes); i++ {
 		blob, err := f.getBlobAt(ctx, i)
 		if err != nil {
-			return err
+			return readBytes
 		}
 
 		if offset > 0 {
@@ -149,32 +120,14 @@ func (f *file) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadR
 
 		dst = dst[copied:]
 	}
-	resp.Data = resp.Data[:readBytes]
+	data = data[:readBytes]
 
-	return nil
+	return readBytes
 }
 
-func (f *file) Release(ctx context.Context, req *fuse.ReleaseRequest) error {
+func (f *file) release(ctx context.Context) error {
 	for i := range f.blobs {
 		f.blobs[i] = nil
 	}
 	return nil
-}
-
-func (f *file) Listxattr(ctx context.Context, req *fuse.ListxattrRequest, resp *fuse.ListxattrResponse) error {
-	debug.Log("Listxattr(%v, %v)", f.node.Name, req.Size)
-	for _, attr := range f.node.ExtendedAttributes {
-		resp.Append(attr.Name)
-	}
-	return nil
-}
-
-func (f *file) Getxattr(ctx context.Context, req *fuse.GetxattrRequest, resp *fuse.GetxattrResponse) error {
-	debug.Log("Getxattr(%v, %v, %v)", f.node.Name, req.Name, req.Size)
-	attrval := f.node.GetExtendedAttribute(req.Name)
-	if attrval != nil {
-		resp.Xattr = attrval
-		return nil
-	}
-	return fuse.ErrNoXattr
 }

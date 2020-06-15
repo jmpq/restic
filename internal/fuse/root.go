@@ -1,5 +1,3 @@
-// +build darwin freebsd linux
-
 package fuse
 
 import (
@@ -10,8 +8,6 @@ import (
 	"github.com/restic/restic/internal/restic"
 
 	"golang.org/x/net/context"
-
-	"bazil.org/fuse/fs"
 )
 
 // Config holds settings for the fuse mount.
@@ -39,10 +35,6 @@ type Root struct {
 	uid, gid uint32
 }
 
-// ensure that *Root implements these interfaces
-var _ = fs.HandleReadDirAller(&Root{})
-var _ = fs.NodeStringLookuper(&Root{})
-
 const rootInode = 1
 
 // NewRoot initializes a new root node from a repository.
@@ -61,20 +53,14 @@ func NewRoot(ctx context.Context, repo restic.Repository, cfg Config) (*Root, er
 		root.gid = uint32(os.Getgid())
 	}
 
-	entries := map[string]fs.Node{
-		"snapshots": NewSnapshotsDir(root, fs.GenerateDynamicInode(root.inode, "snapshots"), "", ""),
-		"tags":      NewTagsDir(root, fs.GenerateDynamicInode(root.inode, "tags")),
-		"hosts":     NewHostsDir(root, fs.GenerateDynamicInode(root.inode, "hosts")),
-		"ids":       NewSnapshotsIDSDir(root, fs.GenerateDynamicInode(root.inode, "ids")),
+	entries := map[string]Node{
+		"snapshots": NewSnapshotsDir(root, GenerateDynamicInode(root.inode, "snapshots"), "", ""),
+		"tags":      NewTagsDir(root, GenerateDynamicInode(root.inode, "tags")),
+		"hosts":     NewHostsDir(root, GenerateDynamicInode(root.inode, "hosts")),
+		"ids":       NewSnapshotsIDSDir(root, GenerateDynamicInode(root.inode, "ids")),
 	}
 
 	root.MetaDir = NewMetaDir(root, rootInode, entries)
 
 	return root, nil
-}
-
-// Root is just there to satisfy fs.Root, it returns itself.
-func (r *Root) Root() (fs.Node, error) {
-	debug.Log("Root()")
-	return r, nil
 }

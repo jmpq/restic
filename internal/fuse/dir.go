@@ -1,22 +1,14 @@
-// +build darwin freebsd linux
-
 package fuse
 
 import (
 	"os"
 	"path/filepath"
 
-	"bazil.org/fuse"
-	"bazil.org/fuse/fs"
 	"golang.org/x/net/context"
 
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/restic"
 )
-
-// Statically ensure that *dir implement those interface
-var _ = fs.HandleReadDirAller(&dir{})
-var _ = fs.NodeStringLookuper(&dir{})
 
 type dir struct {
 	root        *Root
@@ -105,21 +97,6 @@ func newDirFromSnapshot(ctx context.Context, root *Root, inode uint64, snapshot 
 	}, nil
 }
 
-func (d *dir) Attr(ctx context.Context, a *fuse.Attr) error {
-	debug.Log("Attr()")
-	a.Inode = d.inode
-	a.Mode = os.ModeDir | d.node.Mode
-	a.Uid = d.root.uid
-	a.Gid = d.root.gid
-	a.Atime = d.node.AccessTime
-	a.Ctime = d.node.ChangeTime
-	a.Mtime = d.node.ModTime
-
-	a.Nlink = d.calcNumberOfLinks()
-
-	return nil
-}
-
 func (d *dir) calcNumberOfLinks() uint32 {
 	// a directory d has 2 hardlinks + the number
 	// of directories contained by d
@@ -131,82 +108,4 @@ func (d *dir) calcNumberOfLinks() uint32 {
 		}
 	}
 	return count
-}
-
-func (d *dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
-	debug.Log("ReadDirAll()")
-	ret := make([]fuse.Dirent, 0, len(d.items)+2)
-
-	ret = append(ret, fuse.Dirent{
-		Inode: d.inode,
-		Name:  ".",
-		Type:  fuse.DT_Dir,
-	})
-
-	ret = append(ret, fuse.Dirent{
-		Inode: d.parentInode,
-		Name:  "..",
-		Type:  fuse.DT_Dir,
-	})
-
-	for _, node := range d.items {
-		name := cleanupNodeName(node.Name)
-		var typ fuse.DirentType
-		switch node.Type {
-		case "dir":
-			typ = fuse.DT_Dir
-		case "file":
-			typ = fuse.DT_File
-		case "symlink":
-			typ = fuse.DT_Link
-		}
-
-		ret = append(ret, fuse.Dirent{
-			Inode: fs.GenerateDynamicInode(d.inode, name),
-			Type:  typ,
-			Name:  name,
-		})
-	}
-
-	return ret, nil
-}
-
-func (d *dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
-	debug.Log("Lookup(%v)", name)
-	node, ok := d.items[name]
-	if !ok {
-		debug.Log("  Lookup(%v) -> not found", name)
-		return nil, fuse.ENOENT
-	}
-	switch node.Type {
-	case "dir":
-		return newDir(ctx, d.root, fs.GenerateDynamicInode(d.inode, name), d.inode, node)
-	case "file":
-		return newFile(ctx, d.root, fs.GenerateDynamicInode(d.inode, name), node)
-	case "symlink":
-		return newLink(ctx, d.root, fs.GenerateDynamicInode(d.inode, name), node)
-	case "dev", "chardev", "fifo", "socket":
-		return newOther(ctx, d.root, fs.GenerateDynamicInode(d.inode, name), node)
-	default:
-		debug.Log("  node %v has unknown type %v", name, node.Type)
-		return nil, fuse.ENOENT
-	}
-}
-
-func (d *dir) Listxattr(ctx context.Context, req *fuse.ListxattrRequest, resp *fuse.ListxattrResponse) error {
-	debug.Log("Listxattr(%v, %v)", d.node.Name, req.Size)
-	for _, attr := range d.node.ExtendedAttributes {
-		resp.Append(attr.Name)
-	}
-	return nil
-}
-
-func (d *dir) Getxattr(ctx context.Context, req *fuse.GetxattrRequest, resp *fuse.GetxattrResponse) error {
-	debug.Log("Getxattr(%v, %v, %v)", d.node.Name, req.Name, req.Size)
-	attrval := d.node.GetExtendedAttribute(req.Name)
-	if attrval != nil {
-		resp.Xattr = attrval
-		return nil
-	}
-	return fuse.ErrNoXattr
 }
